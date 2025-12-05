@@ -2671,6 +2671,7 @@ const App: React.FC = () => {
                     isLoadingVideoSource ||
                     !videoSourceScript.trim() ||
                     !apiKey.trim() ||
+                    (characters.length === 0 && !referenceImage) ||
                     (hasContentWarning && !isContentWarningAcknowledged)
                   }
                   className="w-full sm:w-auto px-6 py-3 bg-green-600 font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 flex items-center justify-center"
@@ -2684,6 +2685,11 @@ const App: React.FC = () => {
                     "영상 소스 생성"
                   )}
                 </button>
+                {characters.length === 0 && !referenceImage && (
+                  <p className="text-yellow-400 text-sm mt-2">
+                    ⚠️ 영상 소스를 생성하려면 위에서 페르소나를 먼저 생성하거나, 참조 이미지를 업로드해주세요.
+                  </p>
+                )}
               </div>
             </section>
 
