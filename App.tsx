@@ -1336,13 +1336,22 @@ const App: React.FC = () => {
       const itemToRegenerate = videoSource.find(
         (item) => item.id === videoSourceItemId
       );
-      if (!itemToRegenerate) return;
+      if (!itemToRegenerate) {
+        console.error("재생성할 항목을 찾을 수 없습니다:", videoSourceItemId);
+        setError("재생성할 이미지를 찾을 수 없습니다.");
+        return;
+      }
+
+      console.log(`🔄 영상 소스 재생성 시작 - ID: ${videoSourceItemId}`);
+      setError(null); // 이전 에러 초기화
 
       try {
         // 커스텀 프롬프트가 있으면 장면 설명에 추가
         const enhancedDescription = customPrompt
           ? `${itemToRegenerate.sceneDescription}. Additional style: ${customPrompt}`
           : itemToRegenerate.sceneDescription;
+
+        console.log(`📝 재생성 프롬프트: ${enhancedDescription}`);
 
         const newImage = await geminiService.regenerateStoryboardImage(
           enhancedDescription,
@@ -1353,18 +1362,44 @@ const App: React.FC = () => {
           referenceImage,
           aspectRatio
         );
+
+        console.log(`✅ 영상 소스 재생성 성공 - ID: ${videoSourceItemId}`);
+        
+        setVideoSource((prev) => {
+          const updated = prev.map((item) =>
+            item.id === videoSourceItemId ? { ...item, image: newImage } : item
+          );
+          // 재생성 후 즉시 저장
+          console.log('💾 재생성된 영상 소스 저장 중...');
+          setTimeout(() => saveDataToStorage(true), 100);
+          return updated;
+        });
+      } catch (e: any) {
+        console.error("❌ 영상 소스 재생성 오류:", e);
+        
+        let errorMessage = "영상 소스 이미지 재생성에 실패했습니다.";
+        
+        if (e.message) {
+          // API 에러 메시지 파싱
+          if (e.message.includes("INTERNAL") || e.message.includes("500")) {
+            errorMessage = `⚠️ Gemini API 서버 오류가 발생했습니다.\n\n잠시 후(10초) 다시 시도해주세요.\n\n오류 상세: ${e.message}`;
+          } else if (e.message.includes("RATE_LIMIT") || e.message.includes("429")) {
+            errorMessage = `⏳ API 요청 한도를 초과했습니다.\n\n1분 후 다시 시도해주세요.`;
+          } else {
+            errorMessage = `영상 소스 재생성 실패: ${e.message}`;
+          }
+        }
+        
+        setError(errorMessage);
+        
+        // 실패한 이미지는 상태를 유지
         setVideoSource((prev) =>
           prev.map((item) =>
-            item.id === videoSourceItemId ? { ...item, image: newImage } : item
+            item.id === videoSourceItemId
+              ? { ...item, sceneDescription: `${item.sceneDescription}\n\n⚠️ 재생성 실패: ${e.message || "알 수 없는 오류"}` }
+              : item
           )
         );
-      } catch (e) {
-        console.error("영상 소스 재생성 오류:", e);
-        const errorMessage =
-          e instanceof Error
-            ? `영상 소스 이미지 재생성 실패: ${e.message}`
-            : "영상 소스 이미지 재생성에 실패했습니다.";
-        setError(errorMessage);
       }
     },
     [
@@ -1375,6 +1410,7 @@ const App: React.FC = () => {
       subtitleEnabled,
       referenceImage,
       aspectRatio,
+      saveDataToStorage,
     ]
   );
 
