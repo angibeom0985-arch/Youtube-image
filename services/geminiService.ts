@@ -211,6 +211,61 @@ const getGoogleAI = (apiKey?: string) => {
   return new GoogleGenAI({ apiKey: key });
 };
 
+type GenerateContentRequest = Parameters<GoogleGenAI["models"]["generateContent"]>[0];
+
+const TEXT_MODEL_FALLBACKS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+const IMAGE_MODEL_FALLBACKS = [
+  "gemini-2.5-flash-image-preview",
+  "gemini-2.0-flash-preview-image-generation",
+];
+
+const isModelNotFoundError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('"code":404') &&
+    message.includes("is not found for API version") &&
+    message.includes("models/")
+  );
+};
+
+const isImageGenerationRequest = (request: GenerateContentRequest): boolean => {
+  const modalities = request?.config?.responseModalities;
+  return Array.isArray(modalities) && modalities.some((m) => String(m).toUpperCase() === "IMAGE");
+};
+
+const generateContentWithFallback = async (
+  ai: GoogleGenAI,
+  request: GenerateContentRequest
+): Promise<GenerateContentResponse> => {
+  try {
+    return await ai.models.generateContent(request);
+  } catch (error) {
+    if (!request?.model || !isModelNotFoundError(error)) {
+      throw error;
+    }
+
+    const fallbackPool = isImageGenerationRequest(request)
+      ? IMAGE_MODEL_FALLBACKS
+      : TEXT_MODEL_FALLBACKS;
+    const fallbackModels = [...new Set(fallbackPool)].filter((model) => model !== request.model);
+
+    for (const fallbackModel of fallbackModels) {
+      try {
+        console.warn(
+          `⚠️ Model '${request.model}' not found. Retrying with fallback model '${fallbackModel}'.`
+        );
+        return await ai.models.generateContent({ ...request, model: fallbackModel });
+      } catch (fallbackError) {
+        if (!isModelNotFoundError(fallbackError)) {
+          throw fallbackError;
+        }
+      }
+    }
+
+    throw error;
+  }
+};
+
 // Utility to convert file to base64
 const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -369,7 +424,7 @@ export const generateCharacters = async (
       try {
         const visionResponse = await retryWithBackoff(
           () =>
-            ai.models.generateContent({
+            generateContentWithFallback(ai, {
               model: "gemini-2.5-flash",
               contents: [
                 {
@@ -407,7 +462,7 @@ export const generateCharacters = async (
     
     const analysisResponse = await retryWithBackoff(
       () =>
-        ai.models.generateContent({
+        generateContentWithFallback(ai, {
           model: "gemini-2.5-flash",
           contents: analysisPrompt,
           config: {
@@ -596,7 +651,7 @@ export const generateCharacters = async (
           // 모든 경우에 generateContent 사용
           imageResponse = await retryWithBackoff(
             () =>
-              ai.models.generateContent({
+              generateContentWithFallback(ai, {
                 model: "gemini-2.5-flash-image-preview",
                 contents: { parts },
                 config: imageConfig,
@@ -675,7 +730,7 @@ export const generateCharacters = async (
 
               imageResponse = await retryWithBackoff(
                 () =>
-                  ai.models.generateContent({
+                  generateContentWithFallback(ai, {
                     model: "gemini-2.5-flash-image-preview",
                     contents: { parts: safeParts },
                     config: safeImageConfig,
@@ -742,7 +797,7 @@ export const generateCharacters = async (
 
           const fallbackResponse = await retryWithBackoff(
             () =>
-              ai.models.generateContent({
+              generateContentWithFallback(ai, {
                 model: "gemini-2.5-flash-image-preview",
                 contents: { parts: fallbackParts },
                 config: fallbackImageConfig,
@@ -1007,7 +1062,7 @@ export const regenerateCharacterImage = async (
       personGeneration: PersonGeneration.ALLOW_ADULT,  // 성인 사람 생성 허용
     };
 
-    const imageResponse = await ai.models.generateContent({
+    const imageResponse = await generateContentWithFallback(ai, {
       model: "gemini-2.5-flash-image-preview",
       contents: { parts },
       config: imageConfig,
@@ -1038,7 +1093,7 @@ export const regenerateCharacterImage = async (
         personGeneration: PersonGeneration.ALLOW_ADULT,  // 성인 사람 생성 허용
       };
 
-      const fallbackResponse = await ai.models.generateContent({
+      const fallbackResponse = await generateContentWithFallback(ai, {
         model: "gemini-2.5-flash-image-preview",
         contents: { parts: fallbackParts },
         config: fallbackImageConfig,
@@ -1150,7 +1205,7 @@ export const generateStoryboard = async (
 
     const scenesResponse = await retryWithBackoff(
       () =>
-        ai.models.generateContent({
+        generateContentWithFallback(ai, {
           model: "gemini-2.5-flash",
           contents: scenesPrompt,
           config: {
@@ -1275,7 +1330,7 @@ export const generateStoryboard = async (
         // 1단계: 원래 프롬프트로 시도 (재시도 로직 포함)
         imageResponse = await retryWithBackoff(
           () =>
-            ai.models.generateContent({
+            generateContentWithFallback(ai, {
               model: "gemini-2.5-flash-image-preview",
               contents: { parts },
               config: {
@@ -1362,7 +1417,7 @@ export const generateStoryboard = async (
 
             imageResponse = await retryWithBackoff(
               () =>
-                ai.models.generateContent({
+                generateContentWithFallback(ai, {
                   model: "gemini-2.5-flash-image-preview",
                   contents: { parts: safeParts },
                   config: {
@@ -1527,7 +1582,7 @@ export const regenerateStoryboardImage = async (
 
   try {
     // 1단계: 원래 프롬프트로 시도
-    imageResponse = await ai.models.generateContent({
+    imageResponse = await generateContentWithFallback(ai, {
       model: "gemini-2.5-flash-image-preview",
       contents: { parts },
       config: {
@@ -1598,7 +1653,7 @@ export const regenerateStoryboardImage = async (
 
         await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 지연
 
-        imageResponse = await ai.models.generateContent({
+        imageResponse = await generateContentWithFallback(ai, {
           model: "gemini-2.5-flash-image-preview",
           contents: { parts: safeParts },
           config: {
@@ -1780,7 +1835,7 @@ export const generateCameraAngles = async (
 
     const result = await retryWithBackoff(
       () =>
-        ai.models.generateContent({
+        generateContentWithFallback(ai, {
           model: "gemini-2.5-flash-image-preview",
           contents: {
             parts: [
@@ -1867,7 +1922,7 @@ Generate the transformed image showing the same subject from the new angle.`;
       // Gemini 2.5 Flash Image Preview를 사용하여 이미지 변환
       const imageResponse = await retryWithBackoff(
         async () => {
-          const response = await ai.models.generateContent({
+          const response = await generateContentWithFallback(ai, {
             model: "gemini-2.5-flash-image-preview",
             contents: {
               parts: [
