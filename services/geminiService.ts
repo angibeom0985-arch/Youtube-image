@@ -221,10 +221,16 @@ const IMAGE_MODEL_FALLBACKS = [
 
 const isModelNotFoundError = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error);
+  const errorObj = typeof error === "object" && error !== null ? (error as any) : {};
+  const status = errorObj?.error?.status || errorObj?.status;
+  const code = errorObj?.error?.code || errorObj?.code;
+
   return (
-    message.includes('"code":404') &&
-    message.includes("is not found for API version") &&
-    message.includes("models/")
+    code === 404 ||
+    status === "NOT_FOUND" ||
+    message.includes("NOT_FOUND") ||
+    message.includes("is not found for API version") ||
+    message.includes("is not supported for generateContent")
   );
 };
 
