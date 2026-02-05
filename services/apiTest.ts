@@ -43,7 +43,7 @@ export const testApiKey = async (apiKey: string): Promise<{ success: boolean; me
         
         const response = await retryApiCall(
             () => ai.models.generateContent({
-                model: 'gemini-2.5-flash',
+                model: 'gemini-2.5-flash-lite',
                 contents: '간단한 인사말을 해주세요.',
             }),
             3, // 최대 3번 재시도

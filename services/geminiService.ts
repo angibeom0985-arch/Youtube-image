@@ -213,11 +213,13 @@ const getGoogleAI = (apiKey?: string) => {
 
 type GenerateContentRequest = Parameters<GoogleGenAI["models"]["generateContent"]>[0];
 
-const TEXT_MODEL_FALLBACKS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+const TEXT_MODEL_FALLBACKS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
 const IMAGE_MODEL_FALLBACKS = [
-  "gemini-2.5-flash-image-preview",
-  "gemini-2.0-flash-preview-image-generation",
+  "gemini-2.5-flash-image",
 ];
+
+let cachedImageModels: string[] | null = null;
+let cachedTextModels: string[] | null = null;
 
 const isModelNotFoundError = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error);
@@ -236,7 +238,48 @@ const isModelNotFoundError = (error: unknown): boolean => {
 
 const isImageGenerationRequest = (request: GenerateContentRequest): boolean => {
   const modalities = request?.config?.responseModalities;
-  return Array.isArray(modalities) && modalities.some((m) => String(m).toUpperCase() === "IMAGE");
+  if (Array.isArray(modalities) && modalities.some((m) => String(m).toUpperCase() === "IMAGE")) {
+    return true;
+  }
+  const modelName = String(request?.model || "");
+  return /image|imagen/i.test(modelName);
+};
+
+const listModelsByAction = async (
+  ai: GoogleGenAI,
+  action: string,
+  namePattern: RegExp
+): Promise<string[]> => {
+  try {
+    const pager = await ai.models.list();
+    const results: string[] = [];
+    for await (const model of pager) {
+      const name = model?.name || "";
+      const supported = model?.supportedActions || [];
+      if (!name) continue;
+      if (supported.includes(action) && namePattern.test(name)) {
+        results.push(name);
+      }
+    }
+    return results;
+  } catch (err) {
+    console.warn("⚠️ Failed to list models for fallback discovery:", err);
+    return [];
+  }
+};
+
+const getDiscoveredImageModels = async (ai: GoogleGenAI): Promise<string[]> => {
+  if (cachedImageModels) return cachedImageModels;
+  const discovered = await listModelsByAction(ai, "generateContent", /image|imagen/i);
+  cachedImageModels = discovered.filter((model) => IMAGE_MODEL_FALLBACKS.includes(model));
+  return cachedImageModels;
+};
+
+const getDiscoveredTextModels = async (ai: GoogleGenAI): Promise<string[]> => {
+  if (cachedTextModels) return cachedTextModels;
+  const discovered = await listModelsByAction(ai, "generateContent", /gemini/i);
+  cachedTextModels = discovered.filter((model) => TEXT_MODEL_FALLBACKS.includes(model));
+  return cachedTextModels;
 };
 
 const generateContentWithFallback = async (
@@ -250,10 +293,14 @@ const generateContentWithFallback = async (
       throw error;
     }
 
-    const fallbackPool = isImageGenerationRequest(request)
-      ? IMAGE_MODEL_FALLBACKS
-      : TEXT_MODEL_FALLBACKS;
-    const fallbackModels = [...new Set(fallbackPool)].filter((model) => model !== request.model);
+    const isImageRequest = isImageGenerationRequest(request);
+    const discoveredModels = isImageRequest
+      ? await getDiscoveredImageModels(ai)
+      : await getDiscoveredTextModels(ai);
+    const fallbackPool = isImageRequest ? IMAGE_MODEL_FALLBACKS : TEXT_MODEL_FALLBACKS;
+    const fallbackModels = [...new Set([...fallbackPool, ...discoveredModels])].filter(
+      (model) => model !== request.model
+    );
 
     for (const fallbackModel of fallbackModels) {
       try {
@@ -431,7 +478,7 @@ export const generateCharacters = async (
         const visionResponse = await retryWithBackoff(
           () =>
             generateContentWithFallback(ai, {
-              model: "gemini-2.5-flash",
+              model: "gemini-2.5-flash-lite",
               contents: [
                 {
                   role: "user",
@@ -469,7 +516,7 @@ export const generateCharacters = async (
     const analysisResponse = await retryWithBackoff(
       () =>
         generateContentWithFallback(ai, {
-          model: "gemini-2.5-flash",
+          model: "gemini-2.5-flash-lite",
           contents: analysisPrompt,
           config: {
             responseMimeType: "application/json",
@@ -658,7 +705,7 @@ export const generateCharacters = async (
           imageResponse = await retryWithBackoff(
             () =>
               generateContentWithFallback(ai, {
-                model: "gemini-2.5-flash-image-preview",
+                model: "gemini-2.5-flash-image",
                 contents: { parts },
                 config: imageConfig,
               }),
@@ -737,7 +784,7 @@ export const generateCharacters = async (
               imageResponse = await retryWithBackoff(
                 () =>
                   generateContentWithFallback(ai, {
-                    model: "gemini-2.5-flash-image-preview",
+                    model: "gemini-2.5-flash-image",
                     contents: { parts: safeParts },
                     config: safeImageConfig,
                   }),
@@ -804,7 +851,7 @@ export const generateCharacters = async (
           const fallbackResponse = await retryWithBackoff(
             () =>
               generateContentWithFallback(ai, {
-                model: "gemini-2.5-flash-image-preview",
+                model: "gemini-2.5-flash-image",
                 contents: { parts: fallbackParts },
                 config: fallbackImageConfig,
               }),
@@ -1069,7 +1116,7 @@ export const regenerateCharacterImage = async (
     };
 
     const imageResponse = await generateContentWithFallback(ai, {
-      model: "gemini-2.5-flash-image-preview",
+      model: "gemini-2.5-flash-image",
       contents: { parts },
       config: imageConfig,
     });
@@ -1100,7 +1147,7 @@ export const regenerateCharacterImage = async (
       };
 
       const fallbackResponse = await generateContentWithFallback(ai, {
-        model: "gemini-2.5-flash-image-preview",
+        model: "gemini-2.5-flash-image",
         contents: { parts: fallbackParts },
         config: fallbackImageConfig,
       });
@@ -1212,7 +1259,7 @@ export const generateStoryboard = async (
     const scenesResponse = await retryWithBackoff(
       () =>
         generateContentWithFallback(ai, {
-          model: "gemini-2.5-flash",
+          model: "gemini-2.5-flash-lite",
           contents: scenesPrompt,
           config: {
             responseMimeType: "application/json",
@@ -1337,7 +1384,7 @@ export const generateStoryboard = async (
         imageResponse = await retryWithBackoff(
           () =>
             generateContentWithFallback(ai, {
-              model: "gemini-2.5-flash-image-preview",
+              model: "gemini-2.5-flash-image",
               contents: { parts },
               config: {
                   responseModalities: [Modality.IMAGE, Modality.TEXT],
@@ -1424,7 +1471,7 @@ export const generateStoryboard = async (
             imageResponse = await retryWithBackoff(
               () =>
                 generateContentWithFallback(ai, {
-                  model: "gemini-2.5-flash-image-preview",
+                  model: "gemini-2.5-flash-image",
                   contents: { parts: safeParts },
                   config: {
                     responseModalities: [Modality.IMAGE, Modality.TEXT],
@@ -1589,7 +1636,7 @@ export const regenerateStoryboardImage = async (
   try {
     // 1단계: 원래 프롬프트로 시도
     imageResponse = await generateContentWithFallback(ai, {
-      model: "gemini-2.5-flash-image-preview",
+      model: "gemini-2.5-flash-image",
       contents: { parts },
       config: {
         responseModalities: [Modality.IMAGE, Modality.TEXT],
@@ -1660,7 +1707,7 @@ export const regenerateStoryboardImage = async (
         await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 지연
 
         imageResponse = await generateContentWithFallback(ai, {
-          model: "gemini-2.5-flash-image-preview",
+          model: "gemini-2.5-flash-image",
           contents: { parts: safeParts },
           config: {
             responseModalities: [Modality.IMAGE, Modality.TEXT],
@@ -1842,7 +1889,7 @@ export const generateCameraAngles = async (
     const result = await retryWithBackoff(
       () =>
         generateContentWithFallback(ai, {
-          model: "gemini-2.5-flash-image-preview",
+          model: "gemini-2.5-flash-lite",
           contents: {
             parts: [
               { text: analysisPrompt },
@@ -1929,7 +1976,7 @@ Generate the transformed image showing the same subject from the new angle.`;
       const imageResponse = await retryWithBackoff(
         async () => {
           const response = await generateContentWithFallback(ai, {
-            model: "gemini-2.5-flash-image-preview",
+            model: "gemini-2.5-flash-image",
             contents: {
               parts: [
                 {
@@ -2038,3 +2085,4 @@ Generate the transformed image showing the same subject from the new angle.`;
 
   return results;
 };
+
